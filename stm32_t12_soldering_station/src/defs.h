@@ -68,5 +68,7 @@
  */
 
 #define TIP_PWM_TIMER							TIM2
+#define TIP_PWM_TIMER_PRESCALER					0
+#define TIP_PWM_TIMER_PERIOD					1799 //~40kHz timer frequency
 
 #endif /* __DEFS_H__ */

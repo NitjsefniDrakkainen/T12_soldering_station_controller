@@ -31,6 +31,8 @@ static struct StationType_t {
 static void rcc_init();
 static void gpio_init(void);
 static void adc_init(void);
+static void nvic_init(void);
+static void tim_init(void);
 /*----------------------------------------------------------------------------------------*/
 
 /*
@@ -44,6 +46,8 @@ void station_init_periph(void)
 	rcc_init();
 	gpio_init();
 	adc_init();
+	nvic_init();
+	tim_init();
 	//SysTic interrupt 1ms
 	SysTick_Config(SystemCoreClock / 1000);
 }
@@ -91,11 +95,8 @@ void rcc_init()
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
 	RCC_ADCCLKConfig(RCC_PCLK2_Div6);
 
-	//I2C clock
-	RCC_APB1PeriphClockCmd(RCC_APB1Periph_I2C1, ENABLE);
-
-	//TIM2 clock
-	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
+	//I2C, TIM2 clock
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_I2C1 | RCC_APB1Periph_TIM2, ENABLE);
 
 	//DMA1 for adc readings
 	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
@@ -198,4 +199,33 @@ void adc_init(void)
 
 	ADC_SoftwareStartConvCmd(ADC1, ENABLE);
 }
+
+void nvic_init(void)
+{
+	NVIC_InitTypeDef nvic;
+
+	//NVIC configuration for TIP_PWM_TIMER
+	nvic.NVIC_IRQChannel = TIM2_IRQn;
+	nvic.NVIC_IRQChannelPreemptionPriority = 0;
+	nvic.NVIC_IRQChannelSubPriority = 0;
+	nvic.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&nvic);
+}
+
+void tim_init(void)
+{
+	TIM_TimeBaseInitTypeDef timer;
+
+	//TIM2
+	TIM_TimeBaseStructInit(&timer);
+	timer.TIM_ClockDivision = 0;
+	timer.TIM_CounterMode = TIM_CounterMode_Up;
+	timer.TIM_Period = TIP_PWM_TIMER_PERIOD;
+	timer.TIM_Prescaler = TIP_PWM_TIMER_PRESCALER;
+
+	TIM_TimeBaseInit(TIP_PWM_TIMER, &timer); //TIM2 interrupt
+	TIM_ITConfig(TIP_PWM_TIMER, TIM_IT_Update, ENABLE);
+	TIM_Cmd(TIP_PWM_TIMER, ENABLE);
+}
+
 /*----------------------------------------------------------------------------------------*/

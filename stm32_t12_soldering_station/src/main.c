@@ -28,9 +28,9 @@ SOFTWARE.
 */
 
 /* Includes */
+#include <station.h>
 #include <stddef.h>
 #include "stm32f10x.h"
-#include "periph_init.h"
 
 
 /* Private typedef */

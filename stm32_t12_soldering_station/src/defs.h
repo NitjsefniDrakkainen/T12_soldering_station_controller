@@ -8,7 +8,7 @@
 #ifndef __DEFS_H__
 #define __DEFS_H__
 
-#if DEBUG
+#ifdef DEBUG
 #pragma message "debug configuration"
 
 #define USART1_TX_PIN 							GPIO_Pin_9
@@ -49,16 +49,26 @@
 /*
  * ADC Channels definitions
  */
+#define ADC_CHANNELS_NUM						5
 
 #define ADC_TIP_TEMERATURE_SENSE				ADC_Channel_1
 #define ADC_TIP_CURRENT_SENSE					ADC_Channel_2
 #define ADC_INTERNAL_AMBIENT_T_SENSE			ADC_Channel_3
 #define ADC_EXTERNAL_AMBIENT_T_SENSE			ADC_Channel_4
+#define ADC_MCU_TEMPERATURE_SENSE				ADC_Channel_16
+
+#define ADC_TIP_TEMERATURE_VAL					0
+#define ADC_TIP_CURRENT_VAL						1
+#define ADC_INTERNAL_AMBIENT_T_VAL				2
+#define ADC_EXTERNAL_AMBIENT_T_VAL				3
+#define ADC_MCU_TEMPERATURE_VAL					4
 
 /*
  * Timers definitions
  */
 
 #define TIP_PWM_TIMER							TIM2
+#define TIP_PWM_TIMER_PRESCALER					0
+#define TIP_PWM_TIMER_PERIOD					1799 //~40kHz timer frequency
 
 #endif /* __DEFS_H__ */

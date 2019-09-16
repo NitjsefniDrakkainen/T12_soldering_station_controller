@@ -26,3 +26,18 @@ void TIM2_IRQHandler()
 {
 	TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
 }
+
+void EXTI9_5_IRQHandler()
+{
+	if (EXTI_GetITStatus(EXTI_Line9) != RESET) {
+		EXTI_ClearITPendingBit(EXTI_Line9);
+	}
+
+}
+
+void EXTI15_10_IRQHandler()
+{
+	if (EXTI_GetITStatus(EXTI_Line13) != RESET) {
+		EXTI_ClearITPendingBit(EXTI_Line13);
+	}
+}

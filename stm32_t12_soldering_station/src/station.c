@@ -203,6 +203,27 @@ void adc_init(void)
 void nvic_init(void)
 {
 	NVIC_InitTypeDef nvic;
+	EXTI_InitTypeDef exti;
+
+	//encoder A exti
+	EXTI_StructInit(&exti);
+	exti.EXTI_Line = EXTI_Line9;
+	exti.EXTI_Mode = EXTI_Mode_Interrupt;
+	exti.EXTI_Trigger = EXTI_Trigger_Falling;
+	exti.EXTI_LineCmd = ENABLE;
+	EXTI_Init(&exti);
+
+	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource9);
+
+	//encoder A exti
+	EXTI_StructInit(&exti);
+	exti.EXTI_Line = EXTI_Line13;
+	exti.EXTI_Mode = EXTI_Mode_Interrupt;
+	exti.EXTI_Trigger = EXTI_Trigger_Falling;
+	exti.EXTI_LineCmd = ENABLE;
+	EXTI_Init(&exti);
+
+	GPIO_EXTILineConfig(GPIO_PortSourceGPIOC, GPIO_PinSource13);
 
 	//NVIC configuration for TIP_PWM_TIMER
 	nvic.NVIC_IRQChannel = TIM2_IRQn;

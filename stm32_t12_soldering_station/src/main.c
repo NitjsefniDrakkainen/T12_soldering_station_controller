@@ -28,9 +28,12 @@ SOFTWARE.
 */
 
 /* Includes */
-#include <station.h>
-#include <stddef.h>
 #include "stm32f10x.h"
+#include "defs.h"
+#include "station.h"
+#include "m_snprintf.h"
+#include <stddef.h>
+
 
 
 /* Private typedef */
@@ -42,7 +45,6 @@ SOFTWARE.
 
 /* Private macro */
 /* Private variables */
- USART_InitTypeDef USART_InitStructure;
 
 /* Private function prototypes */
 /* Private functions */
@@ -56,10 +58,11 @@ SOFTWARE.
 */
 int main(void)
 {
-
 	/* TODO - Add your application code here */
 	station_init_periph();
 
+	debug_print(USART1, "dupa\r\n");
+	//USART_SendData(USART1, 'c');
 	/* Infinite loop */
 	while (1) {
 

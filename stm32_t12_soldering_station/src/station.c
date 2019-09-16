@@ -50,6 +50,14 @@ void station_init_periph(void)
 	tim_init();
 	//SysTic interrupt 1ms
 	SysTick_Config(SystemCoreClock / 1000);
+
+#ifdef DEBUG
+	USART_InitTypeDef uart;
+	USART_StructInit(&uart);
+	uart.USART_BaudRate = 115200;
+	USART_Init(USART1, &uart);
+	USART_Cmd(USART1, ENABLE);
+#endif
 }
 
 uint8_t station_get_adc_channel(uint8_t chan_nr, uint16_t *pValue)
@@ -108,7 +116,7 @@ void rcc_init()
 
 	//USART1 for debug
 #ifdef DEBUG
-	RCC_APB1PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
 #endif
 }
 
@@ -145,7 +153,7 @@ void gpio_init()
 	gpio.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(ENC_C_PORT, &gpio);
 
-#if DEBUG
+#ifdef DEBUG
 	//UASRT1 TX
 	gpio.GPIO_Pin = USART1_TX_PIN;
 	gpio.GPIO_Mode = GPIO_Mode_AF_PP;
@@ -228,7 +236,7 @@ void nvic_init(void)
 	exti.EXTI_LineCmd = ENABLE;
 	EXTI_Init(&exti);
 
-	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, EXTI_Line12);
+	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource12);
 
 	//encoder C exti
 	EXTI_StructInit(&exti);

@@ -77,6 +77,11 @@ uint8_t station_get_adc_channels(uint8_t nChans, uint16_t *pValue)
 	}
 	return retVal;
 }
+
+void station_iron_tip_handler()
+{
+
+}
 /*----------------------------------------------------------------------------------------*/
 
 /*

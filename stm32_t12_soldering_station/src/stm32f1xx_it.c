@@ -29,6 +29,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f1xx_it.h"
+#include "station.h"
 
 /** @addtogroup IO_Toggle
   * @{
@@ -162,5 +163,43 @@ void SysTick_Handler(void)
   * @}
   */ 
 
+/**
+  * @brief  This function handles TIM2 interrupt request.
+  * @param  None
+  * @retval None
+  */
+
+void TIM2_IRQHandler()
+{
+	TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
+	station_iron_tip_handler();
+}
+
+/**
+  * @brief  This function handles EXTI9_5 interrupt request.
+  * @param  None
+  * @retval None
+  */
+
+void EXTI9_5_IRQHandler()
+{
+	if (EXTI_GetITStatus(EXTI_Line9) != RESET) {
+		EXTI_ClearITPendingBit(EXTI_Line9);
+	}
+
+}
+
+/**
+  * @brief  This function handles EXTI15_10 interrupt request.
+  * @param  None
+  * @retval None
+  */
+
+void EXTI15_10_IRQHandler()
+{
+	if (EXTI_GetITStatus(EXTI_Line13) != RESET) {
+		EXTI_ClearITPendingBit(EXTI_Line13);
+	}
+}
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

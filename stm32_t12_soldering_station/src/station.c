@@ -220,7 +220,17 @@ void nvic_init(void)
 
 	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource9);
 
-	//encoder A exti
+	//handle switch exti
+	EXTI_StructInit(&exti);
+	exti.EXTI_Line = EXTI_Line12;
+	exti.EXTI_Mode = EXTI_Mode_Interrupt;
+	exti.EXTI_Trigger = EXTI_Trigger_Falling;
+	exti.EXTI_LineCmd = ENABLE;
+	EXTI_Init(&exti);
+
+	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, EXTI_Line12);
+
+	//encoder C exti
 	EXTI_StructInit(&exti);
 	exti.EXTI_Line = EXTI_Line13;
 	exti.EXTI_Mode = EXTI_Mode_Interrupt;
@@ -234,6 +244,20 @@ void nvic_init(void)
 	nvic.NVIC_IRQChannel = TIM2_IRQn;
 	nvic.NVIC_IRQChannelPreemptionPriority = 0;
 	nvic.NVIC_IRQChannelSubPriority = 0;
+	nvic.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&nvic);
+
+	//NVIC configuration for Encoder A
+	nvic.NVIC_IRQChannel = EXTI9_5_IRQn;
+	nvic.NVIC_IRQChannelPreemptionPriority = 0x00;
+	nvic.NVIC_IRQChannelSubPriority = 0x00;
+	nvic.NVIC_IRQChannelCmd = ENABLE;
+	NVIC_Init(&nvic);
+
+	//NVIC configuration for Encoder C and handle switch
+	nvic.NVIC_IRQChannel = EXTI15_10_IRQn;
+	nvic.NVIC_IRQChannelPreemptionPriority = 0x00;
+	nvic.NVIC_IRQChannelSubPriority = 0x00;
 	nvic.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&nvic);
 }

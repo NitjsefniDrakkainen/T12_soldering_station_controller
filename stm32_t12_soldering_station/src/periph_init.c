@@ -186,6 +186,7 @@ void adc_init(void)
 	ADC_RegularChannelConfig(ADC1, ADC_EXTERNAL_AMBIENT_T_SENSE, 4, ADC_SampleTime_7Cycles5);
 	ADC_RegularChannelConfig(ADC1, ADC_MCU_TEMPERATURE_SENSE, 5, ADC_SampleTime_7Cycles5);
 
+	ADC_TempSensorVrefintCmd(ENABLE);
 	ADC_DMACmd(ADC1, ENABLE);
 	ADC_Cmd(ADC1, ENABLE);
 

@@ -30,6 +30,7 @@ SOFTWARE.
 /* Includes */
 #include <stddef.h>
 #include "stm32f10x.h"
+#include "periph_init.h"
 
 
 /* Private typedef */
@@ -56,13 +57,13 @@ SOFTWARE.
 int main(void)
 {
 
-  /* TODO - Add your application code here */
+	/* TODO - Add your application code here */
+	station_init_periph();
 
-  /* Infinite loop */
-  while (1)
-  {
+	/* Infinite loop */
+	while (1) {
 
-  }
+	}
 }
 
 

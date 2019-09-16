@@ -16,12 +16,21 @@
 /*----------------------------------------------------------------------------------------*/
 
 /*
+ * static variables and structures definitions
+ */
+
+static struct StationType_t {
+	uint16_t adc_values[ADC_CHANNELS_NUM];
+} _station;
+
+/*
  * static functions declarations
  */
 
 /*----------------------------------------------------------------------------------------*/
 static void rcc_init();
 static void gpio_init(void);
+static void adc_init(void);
 /*----------------------------------------------------------------------------------------*/
 
 /*
@@ -34,8 +43,36 @@ void station_init_periph(void)
 {
 	rcc_init();
 	gpio_init();
+	adc_init();
+	//SysTic interrupt 1ms
+	SysTick_Config(SystemCoreClock / 1000);
 }
 
+uint8_t station_get_adc_channel(uint8_t chan_nr, uint16_t *pValue)
+{
+	uint8_t retVal = 1;
+
+	if (chan_nr <= ADC_CHANNELS_NUM) {
+		*pValue = _station.adc_values[chan_nr - 1];
+		retVal = 0;
+	} else {
+		retVal = 1;
+	}
+
+	return retVal;
+}
+
+uint8_t station_get_adc_channels(uint8_t nChans, uint16_t *pValue)
+{
+	uint8_t retVal = 1;
+
+	if (nChans <= ADC_CHANNELS_NUM) {
+		for (uint8_t i = 0; i < nChans; ++i) {
+			pValue[i] = _station.adc_values[i];
+		}
+	}
+	return retVal;
+}
 /*----------------------------------------------------------------------------------------*/
 
 /*
@@ -60,8 +97,11 @@ void rcc_init()
 	//TIM2 clock
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
 
+	//DMA1 for adc readings
+	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+
 	//USART1 for debug
-#if DEBUG
+#ifdef DEBUG
 	RCC_APB1PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
 #endif
 }
@@ -113,4 +153,48 @@ void gpio_init()
 
 }
 
+void adc_init(void)
+{
+	DMA_InitTypeDef dma;
+	ADC_InitTypeDef adc;
+	DMA_StructInit(&dma);
+
+	dma.DMA_PeripheralBaseAddr = (uint32_t)&ADC1->DR;
+	dma.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
+	dma.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;
+	dma.DMA_MemoryBaseAddr = (uint32_t)_station.adc_values;
+	dma.DMA_MemoryInc = DMA_MemoryInc_Enable;
+	dma.DMA_MemoryDataSize = DMA_MemoryDataSize_HalfWord;
+	dma.DMA_DIR = DMA_DIR_PeripheralSRC;
+	dma.DMA_BufferSize = ADC_CHANNELS_NUM;
+	dma.DMA_Mode = DMA_Mode_Circular;
+	DMA_Init(DMA1_Channel1, &dma);
+
+	DMA_Cmd(DMA1_Channel1, ENABLE);
+
+	ADC_StructInit(&adc);
+
+	adc.ADC_ScanConvMode = ENABLE;
+	adc.ADC_ContinuousConvMode = ENABLE;
+	adc.ADC_NbrOfChannel = ADC_CHANNELS_NUM;
+	adc.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
+	ADC_Init(ADC1, &adc);
+
+	ADC_RegularChannelConfig(ADC1, ADC_TIP_TEMERATURE_SENSE, 1, ADC_SampleTime_7Cycles5);
+	ADC_RegularChannelConfig(ADC1, ADC_TIP_CURRENT_SENSE, 2, ADC_SampleTime_7Cycles5);
+	ADC_RegularChannelConfig(ADC1, ADC_INTERNAL_AMBIENT_T_SENSE, 3, ADC_SampleTime_7Cycles5);
+	ADC_RegularChannelConfig(ADC1, ADC_EXTERNAL_AMBIENT_T_SENSE, 4, ADC_SampleTime_7Cycles5);
+	ADC_RegularChannelConfig(ADC1, ADC_MCU_TEMPERATURE_SENSE, 5, ADC_SampleTime_7Cycles5);
+
+	ADC_DMACmd(ADC1, ENABLE);
+	ADC_Cmd(ADC1, ENABLE);
+
+	ADC_ResetCalibration(ADC1);
+	while (ADC_GetResetCalibrationStatus(ADC1));
+
+	ADC_StartCalibration(ADC1);
+	while(ADC_GetCalibrationStatus(ADC1));
+
+	ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+}
 /*----------------------------------------------------------------------------------------*/

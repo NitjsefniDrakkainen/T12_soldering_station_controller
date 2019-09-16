@@ -12,6 +12,6 @@
  * external interface declarations
  */
 
-extern uint8_t station_init_periph(void);
+extern void station_init_periph(void);
 
 #endif /* __PERIPH_INIT_H__ */

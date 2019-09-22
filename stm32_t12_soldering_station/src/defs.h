@@ -8,13 +8,7 @@
 #ifndef __DEFS_H__
 #define __DEFS_H__
 
-#ifdef DEBUG
-#pragma message "debug configuration"
-
-#define USART1_TX_PIN 							GPIO_Pin_9
-#define USART1_RX_PIN 							GPIO_Pin_10
-#define USART1_PORT								GPIOA
-#endif
+#define SSD1306_USE_I2C
 
 /*
  * Pinout definitions
@@ -45,6 +39,13 @@
 #define ENCODER_PIN_C							GPIO_Pin_13
 #define ENC_C_PORT								GPIOC
 
+#ifdef DEBUG
+#pragma message "debug configuration"
+
+#define USART1_TX_PIN 							GPIO_Pin_9
+#define USART1_RX_PIN 							GPIO_Pin_10
+#define USART1_PORT								GPIOA
+#endif
 
 /*
  * ADC Channels definitions

@@ -19,16 +19,20 @@
 #include <math.h>
 /*----------------------------------------------------------------------------------------*/
 
-#define SELFTEST_MODE									(1 << 7)
-
 /*
  * static variables and structures definitions
  */
 
+
 static struct StationType_t {
 	uint8_t mode_flags;
+	uint8_t handle_flags;
 	volatile uint8_t state_counter;
+	uint16_t lcd_update_freq;
 	volatile uint16_t adc_values[ADC_CHANNELS_NUM];
+	uint16_t temp;
+	int h_ambient;
+	volatile uint32_t ambient;
 } _station;
 
 /*
@@ -53,6 +57,7 @@ static void _i2c_init(void);
 
 void station_init_periph(void)
 {
+	uint32_t delay_cnt = 0;
 	_station.mode_flags = 0;
 	rcc_init();
 	gpio_init();
@@ -80,12 +85,29 @@ void station_init_periph(void)
 	ssd1306_WriteString("Init...", Font_11x18, White);
 	ssd1306_UpdateScreen();
 
+
+	for (delay_cnt = 0; delay_cnt < 7200000; ++delay_cnt) ;
+
+	ssd1306_Fill(Black);
+	ssd1306_UpdateScreen();
+	_station.handle_flags = 0;
 	_station.state_counter = 0;
-	_station.mode_flags |= SELFTEST_MODE;
+	_station.lcd_update_freq = 100;
+	//_station.mode_flags |= STATION_INITED | SELFTEST_MODE;
 
 	debug_print(USART1, "MODE = 0x%2x\r\n", _station.mode_flags);
 	tim_init();
+	_station.handle_flags |= IRON_OPERATE_PHASE;
+	_station.mode_flags |= STATION_INITED;
 
+}
+
+void station_iron_on_off(uint8_t on)
+{
+	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
+		if ( on && !(_station.handle_flags & IRON_ON_FLAG) ) _station.handle_flags |= IRON_ON_FLAG;
+		if (!on && (_station.handle_flags & IRON_ON_FLAG) ) _station.handle_flags &= ~IRON_ON_FLAG;
+	}
 }
 
 uint8_t station_get_adc_channel(uint8_t chan_nr, uint16_t *pValue)
@@ -115,36 +137,145 @@ uint8_t station_get_adc_channels(uint8_t nChans, uint16_t *pValue)
 	return retVal;
 }
 
-volatile uint32_t counter = 0;
+uint8_t station_get_mode(void)
+{
+	return _station.mode_flags;
+}
+
+uint16_t station_get_update_freq(void)
+{
+	return _station.lcd_update_freq;
+}
+
+void station_get_disp_values(uint16_t *t, int *hamb)
+{
+	*t = _station.temp;
+	*hamb = _station.h_ambient;
+}
+
+uint8_t station_get_iron_on()
+{
+	return _station.handle_flags & IRON_ON_FLAG;
+}
+
+volatile uint32_t counter = 0, t_avg = 0;
 
 void station_iron_tip_handler()
 {
 	uint16_t _adc[ADC_CHANNELS_NUM];
-	int amb = 0;
-	if ( ( (_station.mode_flags) & SELFTEST_MODE )) {
-		if(TIM2->CCR2 > 0) {
-			debug_print(USART1, "start!\r\n");
-			TIM2->CCR2 = 1500;
-		}
-		if (++(_station.state_counter) > 250) {
+
+	if ((_station.mode_flags) & STATION_INITED && (_station.handle_flags & IRON_ON_FLAG)) {
+
+		if ((_station.handle_flags & IRON_OPERATE_PHASE) && ( ++(_station.state_counter) > 20)) {
 			_station.state_counter = 0;
+
+			if ( _station.adc_values[ADC_TIP_CURRENT_VAL] < 10 && _station.adc_values[ADC_TIP_TEMERATURE_VAL] > 4000) {
+				debug_print(USART1, "disc ON (error)\r\n");
+				_station.handle_flags &= ~IRON_CONNECTED_FLAG;
+			} else {
+				_station.handle_flags |= IRON_CONNECTED_FLAG;
+			}
+
 			TIM2->CCR2 = 0;
-			_station.mode_flags &=  ~SELFTEST_MODE;
-			//_station.mode_flags =
-			debug_print(USART1, "stop!\r\n");
+			_station.handle_flags &= ~IRON_OPERATE_PHASE;
+			_station.handle_flags |= IRON_WAIT_PHASE;
+
+
+		} else if ((_station.handle_flags & IRON_WAIT_PHASE) && ( ++(_station.state_counter) > 7)) {
+			_station.state_counter = 0;
+			_station.handle_flags &= ~IRON_OPERATE_PHASE;
+			_station.handle_flags &= ~IRON_WAIT_PHASE;
+			_station.handle_flags |= IRON_CHECK_PHASE;
+
+		} else if ((_station.handle_flags & IRON_CHECK_PHASE)) {
+			//_station.state_counter += 1;
+
+			//if ( ++(_station.state_counter) >= 5) {
+				_station.temp = _station.adc_values[ADC_TIP_TEMERATURE_VAL];
+				t_avg = 0;
+				TIM2->CCR2 = 500;
+				_station.handle_flags &= ~IRON_CHECK_PHASE;
+				_station.handle_flags &= ~IRON_WAIT_PHASE;
+				_station.handle_flags |= IRON_OPERATE_PHASE;
+				_station.state_counter = 0;
+		//}
+
+
+		} else {
+			_station.handle_flags |= IRON_OPERATE_PHASE;
 		}
 
 	}
 
-	 //adc_val[0] = _adc[0];
-	//debug_print(USART1, "%d\r\n", _adc[0]);
-	if (++counter > 4000) {
-		counter = 0;
-		station_get_adc_channels(5, _adc);
-		amb = station_thermistor_calc();
-		debug_print(USART1, "T: %d, I: %d, amb_i: %d, amb = %d, hp = %d\r\n ", _adc[0],  _adc[1], _adc[2], amb, GPIO_ReadInputDataBit(ENC_AB_SW_PORT, HANDLE_SLEEP_SWITCH));
+	if (! (_station.handle_flags & IRON_ON_FLAG) ) {
+
+		if (_station.mode_flags & STATION_CURR_SENSE_REQ) {
+
+			if ( ++(_station.state_counter) > 20) {
+				_station.mode_flags &= ~STATION_CURR_SENSE_REQ;
+				_station.state_counter = 0;
+
+				if ( _station.adc_values[ADC_TIP_CURRENT_VAL] < 10 && _station.adc_values[ADC_TIP_TEMERATURE_VAL]) {
+					debug_print(USART1, "disc OFF\r\n");
+					_station.handle_flags &= ~IRON_CONNECTED_FLAG;
+				} else {
+					_station.handle_flags |= IRON_CONNECTED_FLAG;
+				}
+
+				TIM2->CCR2 = 0;
+			}
+		} else {
+			if (_station.adc_values[ADC_TIP_CURRENT_VAL] < 10) {
+				_station.temp = _station.adc_values[ADC_TIP_TEMERATURE_VAL];
+			}
+		}
+	}
+/*
+		if ( ( (_station.mode_flags) & SELFTEST_MODE )) {
+			if(TIM2->CCR2 > 0) {
+				debug_print(USART1, "start!\r\n");
+				TIM2->CCR2 = 1500;
+			}
+			if (++(_station.state_counter) > 250) {
+				_station.state_counter = 0;
+				TIM2->CCR2 = 0;
+				_station.mode_flags &=  ~SELFTEST_MODE;
+				debug_print(USART1, "stop!\r\n");
+			}
+		}
+*/
+		if (++counter > 40000) {
+			counter = 0;
+			station_get_adc_channels(5, _adc);
+			_station.ambient = _adc[3];
+			_station.h_ambient = station_thermistor_calc();
+
+		}
+}
+
+static uint16_t cnt_10ms = 0;
+static uint16_t cnt_1000ms = 0;
+uint8_t cnt = 0;
+void station_controll_callback(void)
+{
+	if ((_station.mode_flags & STATION_INITED) && (++cnt_10ms > 10) ) {
+
+		if ( !(_station.handle_flags & IRON_ON_FLAG) ) {
+
+			TIM2->CCR2 = 100;
+			_station.mode_flags |= STATION_CURR_SENSE_REQ;
+			//debug_print(USART1, "req start\r\n");
+		}
+
+		cnt_10ms = 0;
+	}
+
+	if (++cnt_1000ms > 1000) {
+		cnt_1000ms = 0;
+		debug_print(USART1, "amb = %d, handle = 0x%02x\r\n ",  _station.h_ambient, _station.handle_flags);
 	}
 }
+
 /*----------------------------------------------------------------------------------------*/
 
 /*
@@ -205,7 +336,7 @@ void gpio_init()
 
 	//Digital inputs pins init
 	GPIO_StructInit(&gpio);
-	gpio.GPIO_Pin = ENCODER_PIN_A | ENCODER_PIN_B | HANDLE_SLEEP_SWITCH;
+	gpio.GPIO_Pin = ENCODER_PIN_A | ENCODER_PIN_B;
 	gpio.GPIO_Mode = GPIO_Mode_IN_FLOATING;
 	gpio.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(ENC_AB_SW_PORT, &gpio);
@@ -216,6 +347,7 @@ void gpio_init()
 	gpio.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(ENC_AB_SW_PORT, &gpio);
 
+	GPIO_StructInit(&gpio);
 	gpio.GPIO_Pin = ENCODER_PIN_C;
 	gpio.GPIO_Mode = GPIO_Mode_IN_FLOATING;
 	gpio.GPIO_Speed = GPIO_Speed_2MHz;
@@ -312,7 +444,7 @@ void nvic_init(void)
 	EXTI_StructInit(&exti);
 	exti.EXTI_Line = EXTI_Line13;
 	exti.EXTI_Mode = EXTI_Mode_Interrupt;
-	exti.EXTI_Trigger = EXTI_Trigger_Falling;
+	exti.EXTI_Trigger = EXTI_Trigger_Rising_Falling;
 	exti.EXTI_LineCmd = ENABLE;
 	EXTI_Init(&exti);
 
@@ -384,16 +516,16 @@ void _i2c_init(void)
 /*----------------------------------------------------------------------------------------*/
 
 int	station_thermistor_calc(void) {
-static const uint16_t add_resistor	= 10000;				// The additional resistor value (10koHm)
-static const float 	  normal_temp[2]= { 10000, 25 };		// nominal resistance and the nominal temperature
-static const uint16_t beta 			= 3950;     			// The beta coefficient of the thermistor (usually 3000-4000)
-static uint32_t	average 			= 0;					// Previous value of analog read
-static int 		cached_ambient 		= 0;					// Previous value of the temperature
+	static const uint16_t add_resistor	= 10000;				// The additional resistor value (10koHm)
+	static const float 	  normal_temp[2]= { 10000, 25 };		// nominal resistance and the nominal temperature
+	static const uint16_t beta 			= 3950;     			// The beta coefficient of the thermistor (usually 3000-4000)
+	static uint32_t	average 			= 0;					// Previous value of analog read
+	static int 		cached_ambient 		= 0;					// Previous value of the temperature
 
-	if ((uint32_t)(_station.adc_values[ADC_EXTERNAL_AMBIENT_T_SENSE]) == average)
+	if (_station.ambient == average)
 		return cached_ambient;
 
-	average = (uint32_t)(_station.adc_values[ADC_EXTERNAL_AMBIENT_T_SENSE]);
+	average = _station.ambient;
 
 	// convert the value to resistance
 	float resistance = 4096.0 / (float)average - 1.0;

@@ -30,6 +30,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f1xx_it.h"
 #include "station.h"
+#include "station_UI.h"
+#include "m_snprintf.h"
 
 /** @addtogroup IO_Toggle
   * @{
@@ -141,6 +143,9 @@ void PendSV_Handler(void)
   */
 void SysTick_Handler(void)
 {
+	station_controll_callback();
+	station_ui_input_handler();
+	station_ui_callback();
 }
 
 /******************************************************************************/
@@ -185,6 +190,7 @@ void EXTI9_5_IRQHandler()
 {
 	if (EXTI_GetITStatus(EXTI_Line9) != RESET) {
 		EXTI_ClearITPendingBit(EXTI_Line9);
+
 	}
 
 }
@@ -197,8 +203,11 @@ void EXTI9_5_IRQHandler()
 
 void EXTI15_10_IRQHandler()
 {
+
 	if (EXTI_GetITStatus(EXTI_Line13) != RESET) {
 		EXTI_ClearITPendingBit(EXTI_Line13);
+
+		station_button_callback();
 	}
 
 	if (EXTI_GetITStatus(EXTI_Line12) != RESET) {

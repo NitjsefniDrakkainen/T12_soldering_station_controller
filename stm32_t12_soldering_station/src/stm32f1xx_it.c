@@ -174,10 +174,26 @@ void SysTick_Handler(void)
   * @retval None
   */
 
-void TIM2_IRQHandler()
+void TIM3_IRQHandler()
 {
-	TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
-	station_iron_tip_handler();
+
+	if (TIM_GetITStatus(TIM3, TIM_IT_Update) == SET) {
+		if (TIM2->CCR2 < 100) {
+			TIM2->CCR2 = 100;
+		}
+
+		TIM_ClearITPendingBit(TIM3, TIM_IT_Update);
+	}
+
+	if (TIM_GetITStatus(TIM3, TIM_IT_CC1) == SET) {
+		station_iron_heat_clbk();
+		TIM_ClearITPendingBit(TIM3, TIM_IT_CC1);
+	}
+
+	if (TIM_GetITStatus(TIM3, TIM_IT_CC2) == SET) {
+		station_iron_recalc_clbk();
+		TIM_ClearITPendingBit(TIM3, TIM_IT_CC2);
+	}
 }
 
 /**

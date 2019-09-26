@@ -17,22 +17,65 @@
 #include "ssd1306_fonts.h"
 #include "ssd1306_driver.h"
 #include <math.h>
+#include "helpers.h"
+#include "arm_math.h"
 /*----------------------------------------------------------------------------------------*/
 
 /*
  * static variables and structures definitions
  */
 
+static   uint32_t ema_buff[6] 		= { 0,  0,  0,  0 , 0 , 0};
+static   uint8_t  ema_coeffs[6] 			= { 4, 50, 50, 50 , 10, 200};
+
+struct s_tempReference 	{
+	uint16_t	t200, t260, t330, t400;
+};
+
+/* Choose PID parameters */
+#define PID_PARAM_KP        12          /* Proporcional */
+#define PID_PARAM_KI        0.0021       /* Integral */
+#define PID_PARAM_KD        3.8           /* Derivative */
+
+
+static arm_pid_instance_f32 pid;
+
+
+static struct s_tempReference temp_ref = {
+	.t200	= 200,
+	.t260	= 260,
+	.t330	= 330,
+	.t400	= 400
+};
+
+static struct s_tip {
+	uint16_t	t200, t260, t330, t400;				// The internal temperature in reference points
+	uint8_t		mask;								// The bit mask: TIP_ACTIVE + TIP_CALIBRATED
+	char		name[40];					// T12 tip name suffix, JL02 for T12-JL02
+	int8_t		ambient;							// The ambient temperature in Celsius when the tip being calibrated
+	uint8_t		crc;								// CRC checksum
+} tip;
 
 static struct StationType_t {
-	uint8_t mode_flags;
-	uint8_t handle_flags;
-	volatile uint8_t state_counter;
+	volatile uint8_t mode_flags;
+	volatile uint8_t handle_flags;
 	uint16_t lcd_update_freq;
+	volatile uint16_t temp_avg;
+	uint16_t temp_preset;
+	uint16_t temp_sleep;
+	uint16_t temp_set;
+	volatile uint16_t current_avg;
+
+	uint16_t max_power;
+	uint16_t power_summ;
+	uint16_t disp_power_summ;
+	uint16_t avg_power;
+	uint16_t dispersion_of_power;
+	volatile int h_ambient;
+	int32_t  pid_power;
+	int32_t  pid_integral_summ;
+	volatile uint32_t ambient_avg;
 	volatile uint16_t adc_values[ADC_CHANNELS_NUM];
-	uint16_t temp;
-	int h_ambient;
-	volatile uint32_t ambient;
 } _station;
 
 /*
@@ -41,12 +84,18 @@ static struct StationType_t {
 
 /*----------------------------------------------------------------------------------------*/
 static int	station_thermistor_calc(void);
+//static void station_pid_reset(int temp);
+//static int32_t station_pid_power_calc(uint16_t _set, uint16_t _curr);
+//static uint32_t station_iron_pwm_calc(uint16_t _curr);
+static uint8_t station_get_power(void);
+static uint16_t station_get_temp(uint16_t temp, int16_t ambient);
 static void rcc_init();
 static void gpio_init(void);
 static void adc_init(void);
 static void nvic_init(void);
 static void tim_init(void);
 static void _i2c_init(void);
+
 /*----------------------------------------------------------------------------------------*/
 
 /*
@@ -58,7 +107,7 @@ static void _i2c_init(void);
 void station_init_periph(void)
 {
 	uint32_t delay_cnt = 0;
-	_station.mode_flags = 0;
+
 	rcc_init();
 	gpio_init();
 	adc_init();
@@ -79,7 +128,7 @@ void station_init_periph(void)
 #endif
 	ssd1306_Init();
 	ssd1306_Fill(Black);
-	ssd1306_SetCursor(1 , 0);
+	ssd1306_SetCursor(1 , 1);
 	ssd1306_WriteString("T12 station v_2.0", Font_7x10, White);
 	ssd1306_SetCursor(35 , 13);
 	ssd1306_WriteString("Init...", Font_11x18, White);
@@ -90,14 +139,28 @@ void station_init_periph(void)
 
 	ssd1306_Fill(Black);
 	ssd1306_UpdateScreen();
-	_station.handle_flags = 0;
-	_station.state_counter = 0;
-	_station.lcd_update_freq = 100;
-	//_station.mode_flags |= STATION_INITED | SELFTEST_MODE;
 
-	debug_print(USART1, "MODE = 0x%2x\r\n", _station.mode_flags);
+
+	_station.mode_flags = 0;
+	_station.handle_flags = 0;
+	_station.lcd_update_freq = 100;
+	_station.temp_set = 2000;
+	_station.max_power = 1400;
+
+	tip.t200 = 1100;
+	tip.t260 = 1800;
+	tip.t330 = 2500;
+	tip.t400 = 3700;
+	tip.ambient = 25;
+
+	pid.Ki = PID_PARAM_KI;
+	pid.Kp = PID_PARAM_KP;
+	pid.Kd = PID_PARAM_KD;
+
+	arm_pid_init_f32(&pid, 1);
+
 	tim_init();
-	_station.handle_flags |= IRON_OPERATE_PHASE;
+
 	_station.mode_flags |= STATION_INITED;
 
 }
@@ -105,36 +168,37 @@ void station_init_periph(void)
 void station_iron_on_off(uint8_t on)
 {
 	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
-		if ( on && !(_station.handle_flags & IRON_ON_FLAG) ) _station.handle_flags |= IRON_ON_FLAG;
-		if (!on && (_station.handle_flags & IRON_ON_FLAG) ) _station.handle_flags &= ~IRON_ON_FLAG;
-	}
-}
+		if ( on && !(_station.handle_flags & IRON_ON_FLAG) ) {
+			_station.handle_flags |= IRON_ON_FLAG;
 
-uint8_t station_get_adc_channel(uint8_t chan_nr, uint16_t *pValue)
-{
-	uint8_t retVal = 1;
-
-	if (chan_nr <= ADC_CHANNELS_NUM) {
-		*pValue = _station.adc_values[chan_nr - 1];
-		retVal = 0;
-	} else {
-		retVal = 1;
-	}
-
-	return retVal;
-}
-
-uint8_t station_get_adc_channels(uint8_t nChans, uint16_t *pValue)
-{
-	uint8_t retVal = 1;
-
-	if (nChans <= ADC_CHANNELS_NUM) {
-		for (uint8_t i = 0; i < nChans; ++i) {
-			pValue[i] = _station.adc_values[i];
+			arm_pid_reset_f32(&pid);
 		}
-		retVal = 0;
+		if (!on && (_station.handle_flags & IRON_ON_FLAG) ) {
+			_station.handle_flags &= ~IRON_ON_FLAG;
+			_station.handle_flags &= ~IRON_SLEEP_FLAG;
+		}
+	} else {
+		_station.handle_flags &= ~IRON_ON_FLAG;
 	}
-	return retVal;
+}
+
+void station_iron_sleep_on_off(uint8_t val)
+{
+
+	if (_station.handle_flags & IRON_ON_FLAG) {
+
+		if (val && !(_station.handle_flags & IRON_SLEEP_FLAG)) {
+			_station.handle_flags |= IRON_SLEEP_FLAG;
+			_station.temp_set = _station.temp_sleep;
+		}
+		else if (!val && (_station.handle_flags & IRON_SLEEP_FLAG)) {
+			_station.handle_flags &= ~IRON_SLEEP_FLAG;
+			_station.temp_set = _station.temp_preset;
+
+		}
+	}
+
+	arm_pid_reset_f32(&pid);
 }
 
 uint8_t station_get_mode(void)
@@ -147,132 +211,102 @@ uint16_t station_get_update_freq(void)
 	return _station.lcd_update_freq;
 }
 
-void station_get_disp_values(uint16_t *t, int *hamb)
+void station_get_disp_values(uint16_t *t, int *hamb, uint8_t *pwr)
 {
-	*t = _station.temp;
+	*t = station_get_temp(_station.temp_avg, _station.h_ambient);
 	*hamb = _station.h_ambient;
+	*pwr = station_get_power();
 }
 
-uint8_t station_get_iron_on()
+uint8_t station_iron_get_connected()
+{
+	return _station.handle_flags & IRON_CONNECTED_FLAG;
+}
+
+uint8_t station_get_iron_on(void)
 {
 	return _station.handle_flags & IRON_ON_FLAG;
 }
 
-volatile uint32_t counter = 0, t_avg = 0;
-
-void station_iron_tip_handler()
+uint8_t station_iron_get_sleep(void)
 {
-	uint16_t _adc[ADC_CHANNELS_NUM];
-
-	if ((_station.mode_flags) & STATION_INITED && (_station.handle_flags & IRON_ON_FLAG)) {
-
-		if ((_station.handle_flags & IRON_OPERATE_PHASE) && ( ++(_station.state_counter) > 20)) {
-			_station.state_counter = 0;
-
-			if ( _station.adc_values[ADC_TIP_CURRENT_VAL] < 10 && _station.adc_values[ADC_TIP_TEMERATURE_VAL] > 4000) {
-				debug_print(USART1, "disc ON (error)\r\n");
-				_station.handle_flags &= ~IRON_CONNECTED_FLAG;
-			} else {
-				_station.handle_flags |= IRON_CONNECTED_FLAG;
-			}
-
-			TIM2->CCR2 = 0;
-			_station.handle_flags &= ~IRON_OPERATE_PHASE;
-			_station.handle_flags |= IRON_WAIT_PHASE;
-
-
-		} else if ((_station.handle_flags & IRON_WAIT_PHASE) && ( ++(_station.state_counter) > 7)) {
-			_station.state_counter = 0;
-			_station.handle_flags &= ~IRON_OPERATE_PHASE;
-			_station.handle_flags &= ~IRON_WAIT_PHASE;
-			_station.handle_flags |= IRON_CHECK_PHASE;
-
-		} else if ((_station.handle_flags & IRON_CHECK_PHASE)) {
-			//_station.state_counter += 1;
-
-			//if ( ++(_station.state_counter) >= 5) {
-				_station.temp = _station.adc_values[ADC_TIP_TEMERATURE_VAL];
-				t_avg = 0;
-				TIM2->CCR2 = 500;
-				_station.handle_flags &= ~IRON_CHECK_PHASE;
-				_station.handle_flags &= ~IRON_WAIT_PHASE;
-				_station.handle_flags |= IRON_OPERATE_PHASE;
-				_station.state_counter = 0;
-		//}
-
-
-		} else {
-			_station.handle_flags |= IRON_OPERATE_PHASE;
-		}
-
-	}
-
-	if (! (_station.handle_flags & IRON_ON_FLAG) ) {
-
-		if (_station.mode_flags & STATION_CURR_SENSE_REQ) {
-
-			if ( ++(_station.state_counter) > 20) {
-				_station.mode_flags &= ~STATION_CURR_SENSE_REQ;
-				_station.state_counter = 0;
-
-				if ( _station.adc_values[ADC_TIP_CURRENT_VAL] < 10 && _station.adc_values[ADC_TIP_TEMERATURE_VAL]) {
-					debug_print(USART1, "disc OFF\r\n");
-					_station.handle_flags &= ~IRON_CONNECTED_FLAG;
-				} else {
-					_station.handle_flags |= IRON_CONNECTED_FLAG;
-				}
-
-				TIM2->CCR2 = 0;
-			}
-		} else {
-			if (_station.adc_values[ADC_TIP_CURRENT_VAL] < 10) {
-				_station.temp = _station.adc_values[ADC_TIP_TEMERATURE_VAL];
-			}
-		}
-	}
-/*
-		if ( ( (_station.mode_flags) & SELFTEST_MODE )) {
-			if(TIM2->CCR2 > 0) {
-				debug_print(USART1, "start!\r\n");
-				TIM2->CCR2 = 1500;
-			}
-			if (++(_station.state_counter) > 250) {
-				_station.state_counter = 0;
-				TIM2->CCR2 = 0;
-				_station.mode_flags &=  ~SELFTEST_MODE;
-				debug_print(USART1, "stop!\r\n");
-			}
-		}
-*/
-		if (++counter > 40000) {
-			counter = 0;
-			station_get_adc_channels(5, _adc);
-			_station.ambient = _adc[3];
-			_station.h_ambient = station_thermistor_calc();
-
-		}
+	return ( (_station.handle_flags & IRON_ON_FLAG) && (_station.handle_flags & IRON_SLEEP_FLAG));
 }
 
-static uint16_t cnt_10ms = 0;
+
+volatile uint32_t counter = 0, t_avg = 0;
+
+void station_iron_heat_clbk()
+{
+	_station.current_avg = exp_mov_average((int32_t *)(&ema_buff[0]), ema_coeffs[0], _station.adc_values[ADC_TIP_CURRENT_VAL]);
+
+	if ( _station.current_avg < 10 ) {
+
+		_station.handle_flags &= ~IRON_CONNECTED_FLAG;
+		_station.handle_flags &= ~IRON_ON_FLAG;
+	} else {
+		_station.handle_flags |= IRON_CONNECTED_FLAG;
+	}
+
+	TIM2->CCR2 = 0;
+}
+
+void station_iron_recalc_clbk()
+{
+	float error = _station.temp_set - _station.adc_values[ADC_TIP_TEMERATURE_VAL], pow;
+	uint16_t pwm = 0;
+	//_station.temp_avg = _station.adc_values[ADC_TIP_TEMERATURE_VAL];
+
+	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
+		//TODO calculate power with pid
+
+		_station.temp_avg = exp_mov_average((int32_t *)(&ema_buff[1]), ema_coeffs[1], _station.adc_values[ADC_TIP_TEMERATURE_VAL]);
+		if (_station.handle_flags & IRON_ON_FLAG) {
+
+			pow = arm_pid_f32(&pid, error);
+			if (pow < 0) pow = 0;
+			pwm = ((uint16_t)(pow) >> 1);
+
+			if (pwm > _station.max_power) pwm = _station.max_power;
+			TIM2->CCR2 = pwm;
+
+			debug_print(USART1, "pwm: %d, (%d) t: %d\r\n", (int32_t)(pow), TIM2->CCR2, _station.temp_avg);
+		} else {
+			TIM2->CCR2 = 0;
+		}
+	}
+
+
+}
+
+
+static uint8_t cnt_10ms = 0;
 static uint16_t cnt_1000ms = 0;
-uint8_t cnt = 0;
+
 void station_controll_callback(void)
 {
-	if ((_station.mode_flags & STATION_INITED) && (++cnt_10ms > 10) ) {
-
-		if ( !(_station.handle_flags & IRON_ON_FLAG) ) {
-
-			TIM2->CCR2 = 100;
-			_station.mode_flags |= STATION_CURR_SENSE_REQ;
-			//debug_print(USART1, "req start\r\n");
+	if ((_station.handle_flags & IRON_ON_FLAG)) {
+		if ( (_station.handle_flags & IRON_SLEEP_FLAG) && (GPIO_ReadInputDataBit(ENC_AB_SW_PORT, HANDLE_SLEEP_SWITCH) == SET) ) {
+			//iron is on, switch signal is high - go to operate mode
+			_station.handle_flags &= ~IRON_SLEEP_FLAG;
+			_station.temp_set = _station.temp_preset;
+			//station_pid_reset(_station.temp_set);
+		} else if (!(_station.handle_flags & IRON_SLEEP_FLAG) && (GPIO_ReadInputDataBit(ENC_AB_SW_PORT, HANDLE_SLEEP_SWITCH) == RESET) ) {
+			//iron is on, switch signal is low - go to sleep mode
+			_station.handle_flags |= IRON_SLEEP_FLAG;
+			_station.temp_set = _station.temp_sleep;
+			//station_pid_reset(_station.temp_set);
 		}
+	}
 
-		cnt_10ms = 0;
+	if (++cnt_10ms > 10) {
+		_station.ambient_avg = exp_mov_average((int32_t *)(&ema_buff[2]), ema_coeffs[2], _station.adc_values[ADC_EXTERNAL_AMBIENT_T_VAL]);
+		_station.h_ambient = station_thermistor_calc();
 	}
 
 	if (++cnt_1000ms > 1000) {
 		cnt_1000ms = 0;
-		debug_print(USART1, "amb = %d, handle = 0x%02x\r\n ",  _station.h_ambient, _station.handle_flags);
+		//debug_print(USART1, "amb = %d, curr = %d\r\n ",  _station.h_ambient, _station.adc_values[ADC_TIP_CURRENT_VAL]);
 	}
 }
 
@@ -283,6 +317,118 @@ void station_controll_callback(void)
  */
 
 /*----------------------------------------------------------------------------------------*/
+#if 0
+static void station_pid_reset(int t)
+{
+	_station.temp_prev_0 = 0;
+	_station.pid_power = 0;
+	_station.pid_integral_summ = 0;
+	_station.handle_flags &= ~IRON_PID_PI_MODE_FLAG;
+
+	if (t > 0 && t < 4096) {
+		_station.temp_prev_1 = t;
+	} else {
+		_station.temp_prev_1 = 0;
+	}
+	//debug_print(USART1, "reset, cool flag = %d, iterate = %d\r\n", (_station.handle_flags & IRON_COOLING_FLAG) ? 1 : 0, (_station.handle_flags & IRON_PID_PI_MODE_FLAG) ? 1 : 0);
+}
+
+int32_t station_pid_power_calc(uint16_t _set, uint16_t _curr)
+{
+	int32_t diff =  _set - _curr, curr_diff = _station.temp_prev_1 - _curr, d_diff = (_station.temp_prev_0 + _curr - 2 * _station.temp_prev_1 );
+	int32_t p_drive, d_drive, i_drive, delta, ret;
+
+	if (!_station.temp_prev_0) {
+		if ( !(_station.handle_flags & IRON_PID_PI_MODE_FLAG) && diff < 30 ) {
+			_station.handle_flags |= IRON_PID_PI_MODE_FLAG;
+			_station.pid_power = 0;
+			_station.pid_integral_summ = 0;
+			//debug_print(USART1, "iterate, cool flag = %d, iterate = %d\r\n", (_station.handle_flags & IRON_COOLING_FLAG) ? 1 : 0, (_station.handle_flags & IRON_PID_PI_MODE_FLAG) ? 1 : 0);
+		}
+		_station.pid_integral_summ += diff;
+		_station.pid_power = _station.p_factor * diff + _station.i_factor * _station.pid_integral_summ;
+	} else {
+		p_drive = _station.p_factor * curr_diff;
+		d_drive = _station.d_factor * d_diff;
+		i_drive = _station.i_factor * diff;
+		delta = p_drive + i_drive + d_drive;
+		_station.pid_power += delta;
+	}
+
+	if (_station.handle_flags & IRON_PID_PI_MODE_FLAG) {
+		_station.temp_prev_0 = _station.temp_prev_1;
+
+	}
+
+	_station.temp_prev_1 = _curr;
+	ret = _station.pid_power + (1 << (_station.pid_denominator - 1));
+	ret = ret >> _station.pid_denominator;
+	//debug_print(USART1, "%d %d\r\n",_curr, ret);
+	return ret;
+}
+
+uint32_t station_iron_pwm_calc(uint16_t _curr)
+{
+	uint32_t ret = 0;
+	int32_t diff;
+	if (_station.handle_flags & IRON_ON_FLAG) {
+
+		if ( (_curr > TIP_MAX_TEMP_ADC) || (_curr > (_station.temp_set) + 400 ) ) {
+			_station.handle_flags |= IRON_COOLING_FLAG;
+			//debug_print(USART1, "cooling, diff = %d\r\n", (int32_t)(_curr - _station.temp_set ));
+		}
+
+		if (_station.handle_flags & IRON_COOLING_FLAG) {
+
+			if (_curr < (_station.temp_set - 2)) {
+
+				_station.handle_flags &= ~IRON_COOLING_FLAG;
+				station_pid_reset(0);
+				//debug_print(USART1, "cool end, cool flag = %d, iterate = %d\r\n", (_station.handle_flags & IRON_COOLING_FLAG) ? 1 : 0, (_station.handle_flags & IRON_PID_PI_MODE_FLAG) ? 1 : 0);
+			} else {
+				_station.avg_power = exp_mov_average((int32_t *)(&(_station.power_summ)), ema_coeffs[5], 0);
+				_station.dispersion_of_power = exp_mov_average((int32_t *)(&(_station.disp_power_summ)), ema_coeffs[5], _station.avg_power * _station.avg_power);
+				return 0;
+			}
+		}
+
+		ret = station_pid_power_calc(_station.temp_set, _curr);
+		ret = constrain(ret, 0, _station.max_power);
+	}
+	_station.avg_power = exp_mov_average((int32_t *)(&(_station.power_summ)), ema_coeffs[5], ret);
+
+	diff = _station.avg_power - ret;
+	_station.dispersion_of_power = exp_mov_average((int32_t *)(&(_station.disp_power_summ)), ema_coeffs[5], diff * diff);
+
+	return ret;
+}
+#endif
+uint8_t station_get_power(void)
+{
+	//uint16_t tmp = _station.avg_power;
+	//tmp = constrain(tmp, 0, _station.max_power);
+	return /*(uint8_t) map(tmp, 0, _station.max_power, 0, 100)*/((uint8_t)(100*TIM2->CCR2/_station.max_power));
+}
+
+static uint16_t station_get_temp(uint16_t temp, int16_t ambient) {
+	int16_t tempH = 0;
+
+	// The temperature difference between current ambient temperature and one when the tip being calibrated
+	int d = ambient - tip.ambient;
+	if (temp < tip.t200) {
+	    tempH = map(temp, 0, tip.t200, ambient, temp_ref.t200+d);
+	} else if (temp < tip.t260) {
+		tempH = map(temp, tip.t200, tip.t260, temp_ref.t200+d, temp_ref.t260+d);
+	} else if (temp < tip.t330){
+		tempH = map(temp, tip.t260, tip.t330, temp_ref.t260+d, temp_ref.t330+d);
+	} else {
+		tempH = map(temp, tip.t330, tip.t400, temp_ref.t330+d, temp_ref.t400+d);
+	}
+	if (tempH < 0) tempH = 0;
+	//if (!a_cfg.celsius)
+	    //tempH = celsiusToFahrenheit(tempH);
+	return tempH;
+}
 
 void rcc_init()
 {
@@ -295,8 +441,8 @@ void rcc_init()
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
 
 
-	//I2C, TIM2 clock
-	RCC_APB1PeriphClockCmd(RCC_APB1Periph_I2C1 | RCC_APB1Periph_TIM2, ENABLE);
+	//I2C, TIM2, TIM3 clock
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_I2C1 | RCC_APB1Periph_TIM2 | RCC_APB1Periph_TIM3, ENABLE);
 
 	//DMA1 for adc readings
 	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
@@ -429,7 +575,7 @@ void nvic_init(void)
 	EXTI_Init(&exti);
 
 	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource9);
-
+	/*
 	//handle switch exti
 	EXTI_StructInit(&exti);
 	exti.EXTI_Line = EXTI_Line12;
@@ -439,7 +585,7 @@ void nvic_init(void)
 	EXTI_Init(&exti);
 
 	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource12);
-
+	*/
 	//encoder C exti
 	EXTI_StructInit(&exti);
 	exti.EXTI_Line = EXTI_Line13;
@@ -450,8 +596,8 @@ void nvic_init(void)
 
 	GPIO_EXTILineConfig(GPIO_PortSourceGPIOC, GPIO_PinSource13);
 
-	//NVIC configuration for TIP_PWM_TIMER
-	nvic.NVIC_IRQChannel = TIM2_IRQn;
+	//NVIC configuration for TIM3
+	nvic.NVIC_IRQChannel = TIM3_IRQn;
 	nvic.NVIC_IRQChannelPreemptionPriority = 0;
 	nvic.NVIC_IRQChannelSubPriority = 0;
 	nvic.NVIC_IRQChannelCmd = ENABLE;
@@ -477,25 +623,53 @@ void tim_init(void)
 	TIM_TimeBaseInitTypeDef timer;
 	TIM_OCInitTypeDef  channel;
 
-	//TIM2
+	//TIM2 base
 	TIM_TimeBaseStructInit(&timer);
 	timer.TIM_ClockDivision = 0;
 	timer.TIM_CounterMode = TIM_CounterMode_Up;
-	timer.TIM_Period = TIP_PWM_TIMER_PERIOD;
+	timer.TIM_Period = TIP_PWM_TIMER_PERIOD /*65535*/;
 	timer.TIM_Prescaler = TIP_PWM_TIMER_PRESCALER;
 
-	TIM_TimeBaseInit(TIP_PWM_TIMER, &timer); //TIM2 interrupt
+	TIM_TimeBaseInit(TIP_PWM_TIMER, &timer);
+	//TIM3 base
+	timer.TIM_Period = 399;
+	TIM_TimeBaseInit(TIM3, &timer);
 
+	//TIM2 ch2 PWM
 	TIM_OCStructInit(&channel);
 	channel.TIM_OCMode = TIM_OCMode_PWM1;
 	channel.TIM_OutputState = TIM_OutputState_Enable;
 	channel.TIM_Pulse = 0;
 	TIM_OC2Init(TIP_PWM_TIMER, &channel);
 
-	TIM_ITConfig(TIP_PWM_TIMER, TIM_IT_Update, ENABLE);
+	/* Select the Master Slave Mode */
+	TIM_SelectMasterSlaveMode(TIM2, TIM_MasterSlaveMode_Enable);
+
+	/* Master Mode selection */
+	TIM_SelectOutputTrigger(TIM2, TIM_TRGOSource_Update);
+
+	//TIM3 channel 1 for heating drive
+	TIM_OCStructInit(&channel);
+	channel.TIM_OCMode = TIM_OCMode_Timing;
+	channel.TIM_OutputState = TIM_OutputState_Enable;
+	channel.TIM_Pulse = 20;
+	TIM_OC1Init(TIM3, &channel);
+
+	//TIM3 channel 2 for measurement phase
+	TIM_OCStructInit(&channel);
+	channel.TIM_OCMode = TIM_OCMode_Timing;
+	channel.TIM_OutputState = TIM_OutputState_Enable;
+	channel.TIM_Pulse = 28;
+	TIM_OC2Init(TIM3, &channel);
+
+	TIM_ITConfig(TIM3, TIM_IT_Update|TIM_IT_CC1|TIM_IT_CC2, ENABLE); //TIM3 interrupt
+
+	/* Slave Mode selection: TIM3 */
+	TIM_SelectSlaveMode(TIM3, TIM_SlaveMode_Gated);
+	TIM_SelectInputTrigger(TIM3, TIM_TS_ITR1);
+
+	TIM_Cmd(TIM3, ENABLE);
 	TIM_Cmd(TIP_PWM_TIMER, ENABLE);
-
-
 }
 
 void _i2c_init(void)
@@ -522,10 +696,10 @@ int	station_thermistor_calc(void) {
 	static uint32_t	average 			= 0;					// Previous value of analog read
 	static int 		cached_ambient 		= 0;					// Previous value of the temperature
 
-	if (_station.ambient == average)
+	if (_station.ambient_avg == average)
 		return cached_ambient;
 
-	average = _station.ambient;
+	average = _station.ambient_avg;
 
 	// convert the value to resistance
 	float resistance = 4096.0 / (float)average - 1.0;

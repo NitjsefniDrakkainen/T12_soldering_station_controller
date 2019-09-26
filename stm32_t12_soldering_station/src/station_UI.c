@@ -53,22 +53,30 @@ void station_ui_input_handler(void)
 
 void station_ui_callback(void)
 {
-	uint8_t mode = station_get_mode();
+	uint8_t mode = station_get_mode(), pwr;
 	uint16_t temp;
 	int handle_amb;
 	if (mode & STATION_INITED) {
 		if (++update_freq_cnt > station_get_update_freq()) {
-			station_get_disp_values(&temp, &handle_amb);
+			station_get_disp_values(&temp, &handle_amb, &pwr);
 			ssd1306_SetCursor(1 , 0);
-			m_snprintf(line_buffer, 60, "set: %03d      %s", 273, station_get_iron_on() ? "ON " : "OFF");
+			if (station_iron_get_sleep()) {
+				m_snprintf(line_buffer, 60, "set: %03d    %s", 273, "SLEEP");
+			} else {
+				m_snprintf(line_buffer, 60, "set: %03d      %s", 273, station_get_iron_on() ? "ON " : "OFF");
+			}
 			ssd1306_WriteString(line_buffer, Font_7x10, White);
 
 			ssd1306_SetCursor(1 , 20);
-			m_snprintf(line_buffer, 60, "%03d   %01d", temp, GPIO_ReadInputDataBit(ENC_C_PORT, ENCODER_PIN_C));
+			if ( station_iron_get_connected() ) {
+				m_snprintf(line_buffer, 60, "  %03d", temp);
+			} else {
+				m_snprintf(line_buffer, 60, "  %s", "No Tip");
+			}
 			ssd1306_WriteString(line_buffer, Font_11x18, White);
 
 			ssd1306_SetCursor(1 , 50);
-			m_snprintf(line_buffer, 60, "P: %03d     amb: %02d", 0, handle_amb);
+			m_snprintf(line_buffer, 60, "P: %03d     amb: %02d", pwr, handle_amb);
 			ssd1306_WriteString(line_buffer, Font_7x10, White);
 			ssd1306_UpdateScreen();
 			update_freq_cnt = 0;

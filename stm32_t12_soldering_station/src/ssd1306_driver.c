@@ -78,56 +78,16 @@ static SSD1306_t SSD1306;
 
 // Initialize the oled screen
 void ssd1306_Init(void) {
-	uint32_t delay_t = 0;
-	uint8_t i;
-
+	volatile uint32_t delay_t = 0;
+	/*TODO delay function*/
 	while (1) {
-		if ( ++delay_t > 720000 ) {
+		if ( ++delay_t > 1400000 ) {
 			break;
 		}
 	}
 
 	delay_t = 0;
-	/*
-	I2C_GenerateSTART(I2C1, ENABLE);
-	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT) != SUCCESS) {
-		if ( ++delay_t > 72000 ) {
-			break;
-		}
-	}
-	delay_t = 0;
-	I2C_Send7bitAddress(I2C1, SLAVE_ADDRESS, I2C_Direction_Transmitter);
-	while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED) != SUCCESS){
-		if ( ++delay_t > 72000 ) {
-			break;
-		}
-	}
-	delay_t = 0;
-	I2C_SendData(I2C1, 0x80);
 
-	for (i = 0; i < sizeof(Init_Table); i++) {
-		I2C_SendData(I2C1, Init_Table[i]);
-		while (I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING) != SUCCESS) {
-			if ( ++delay_t > 72000 ) {
-				break;
-			}
-		}
-		delay_t = 0;
-	};
-
-	I2C_GenerateSTOP(I2C1, ENABLE);
-    // Clear screen
-    ssd1306_Fill(Black);
-
-    // Flush buffer to screen
-    ssd1306_UpdateScreen();
-
-    // Set default values for screen object
-    SSD1306.CurrentX = 0;
-    SSD1306.CurrentY = 0;
-
-    SSD1306.Initialized = 1;
-    */
     // Init OLED
     ssd1306_WriteCommand(0xAE); //display off
 

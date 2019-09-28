@@ -25,6 +25,8 @@
  * static variables and structures definitions
  */
 
+#define TEMP_0							(4U)
+
 static   uint32_t ema_buff[6] 		= { 0,  0,  0,  0 , 0 , 0};
 static   uint8_t  ema_coeffs[6] 			= { 4, 50, 50, 50 , 10, 200};
 
@@ -33,12 +35,13 @@ struct s_tempReference 	{
 };
 
 /* Choose PID parameters */
-#define PID_PARAM_KP        12          /* Proporcional */
-#define PID_PARAM_KI        0.0021       /* Integral */
-#define PID_PARAM_KD        3.8           /* Derivative */
+#define PID_Q15_PARAM_KP        0x4CCD          /* Proporcional = 0,6*/
+#define PID_Q15_PARAM_KI        0x1AA       	/* Integral = 0.013 */
+#define PID_Q15_PARAM_KD        0x1852          /* Derivative = 0.19*/
 
 
-static arm_pid_instance_f32 pid;
+static arm_pid_instance_q15 pid_q;
+
 
 
 static struct s_tempReference temp_ref = {
@@ -87,6 +90,7 @@ static int	station_thermistor_calc(void);
 //static void station_pid_reset(int temp);
 //static int32_t station_pid_power_calc(uint16_t _set, uint16_t _curr);
 //static uint32_t station_iron_pwm_calc(uint16_t _curr);
+static uint16_t station_iron_pwm_calc(void);
 static uint8_t station_get_power(void);
 static uint16_t station_get_temp(uint16_t temp, int16_t ambient);
 static void rcc_init();
@@ -145,7 +149,7 @@ void station_init_periph(void)
 	_station.handle_flags = 0;
 	_station.lcd_update_freq = 100;
 	_station.temp_set = 2000;
-	_station.max_power = 1400;
+	_station.max_power = 1600;
 
 	tip.t200 = 1100;
 	tip.t260 = 1800;
@@ -153,11 +157,11 @@ void station_init_periph(void)
 	tip.t400 = 3700;
 	tip.ambient = 25;
 
-	pid.Ki = PID_PARAM_KI;
-	pid.Kp = PID_PARAM_KP;
-	pid.Kd = PID_PARAM_KD;
+	pid_q.Kp = PID_Q15_PARAM_KP;
+	pid_q.Ki = PID_Q15_PARAM_KI;
+	pid_q.Kd = PID_Q15_PARAM_KD;
 
-	arm_pid_init_f32(&pid, 1);
+	arm_pid_init_q15(&pid_q, 1);
 
 	tim_init();
 
@@ -170,8 +174,7 @@ void station_iron_on_off(uint8_t on)
 	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
 		if ( on && !(_station.handle_flags & IRON_ON_FLAG) ) {
 			_station.handle_flags |= IRON_ON_FLAG;
-
-			arm_pid_reset_f32(&pid);
+			arm_pid_reset_q15(&pid_q);
 		}
 		if (!on && (_station.handle_flags & IRON_ON_FLAG) ) {
 			_station.handle_flags &= ~IRON_ON_FLAG;
@@ -198,7 +201,7 @@ void station_iron_sleep_on_off(uint8_t val)
 		}
 	}
 
-	arm_pid_reset_f32(&pid);
+	arm_pid_reset_q15(&pid_q);
 }
 
 uint8_t station_get_mode(void)
@@ -234,7 +237,6 @@ uint8_t station_iron_get_sleep(void)
 }
 
 
-volatile uint32_t counter = 0, t_avg = 0;
 
 void station_iron_heat_clbk()
 {
@@ -253,24 +255,19 @@ void station_iron_heat_clbk()
 
 void station_iron_recalc_clbk()
 {
-	float error = _station.temp_set - _station.adc_values[ADC_TIP_TEMERATURE_VAL], pow;
-	uint16_t pwm = 0;
-	//_station.temp_avg = _station.adc_values[ADC_TIP_TEMERATURE_VAL];
 
 	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
 		//TODO calculate power with pid
 
 		_station.temp_avg = exp_mov_average((int32_t *)(&ema_buff[1]), ema_coeffs[1], _station.adc_values[ADC_TIP_TEMERATURE_VAL]);
 		if (_station.handle_flags & IRON_ON_FLAG) {
+			/*calc pwm func begin*/
+			if (_station.adc_values[ADC_TIP_TEMERATURE_VAL] < 500) {
+				TIM2->CCR2 = _station.max_power;
+			} else {
+				TIM2->CCR2 = station_iron_pwm_calc();
+			}
 
-			pow = arm_pid_f32(&pid, error);
-			if (pow < 0) pow = 0;
-			pwm = ((uint16_t)(pow) >> 1);
-
-			if (pwm > _station.max_power) pwm = _station.max_power;
-			TIM2->CCR2 = pwm;
-
-			debug_print(USART1, "pwm: %d, (%d) t: %d\r\n", (int32_t)(pow), TIM2->CCR2, _station.temp_avg);
 		} else {
 			TIM2->CCR2 = 0;
 		}
@@ -403,6 +400,21 @@ uint32_t station_iron_pwm_calc(uint16_t _curr)
 	return ret;
 }
 #endif
+
+uint16_t station_iron_pwm_calc(void)
+{
+	uint32_t tip_err;
+	q15_t _in_err, _out_p;
+
+	tip_err = (int32_t)(((_station.temp_set - _station.adc_values[ADC_TIP_TEMERATURE_VAL]) << 15)/(_station.temp_set - TEMP_0));
+	_in_err = (int16_t)((tip_err * (2 << 14)) >> 15);
+	_out_p = arm_pid_q15(&pid_q, _in_err);
+
+	if (_out_p < 0 ) _out_p = 0;
+	return ( (uint16_t)map(_out_p, 0, 32768, 0, _station.max_power));
+
+
+}
 uint8_t station_get_power(void)
 {
 	//uint16_t tmp = _station.avg_power;

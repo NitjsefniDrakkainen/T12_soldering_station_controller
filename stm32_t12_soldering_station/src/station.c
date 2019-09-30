@@ -35,9 +35,13 @@ struct s_tempReference 	{
 };
 
 /* Choose PID parameters */
-#define PID_Q15_PARAM_KP        0x4CCD          /* Proporcional = 0,6*/
-#define PID_Q15_PARAM_KI        0x1AA       	/* Integral = 0.013 */
-#define PID_Q15_PARAM_KD        0x1852          /* Derivative = 0.19*/
+//#define PID_Q15_PARAM_KP        0x4CCD          /* Proporcional = 0,6*/
+//#define PID_Q15_PARAM_KI        0x1AA       	/* Integral = 0.013 */
+//#define PID_Q15_PARAM_KD        0x1852          /* Derivative = 0.19*/
+
+#define PID_Q15_PARAM_KP        20766          /* Proporcional = 0,63*/
+#define PID_Q15_PARAM_KI        34      	/* Integral = 0.0009 */
+#define PID_Q15_PARAM_KD        6015         /* Derivative = 0.06*/
 
 
 static arm_pid_instance_q15 pid_q;
@@ -54,7 +58,7 @@ static struct s_tempReference temp_ref = {
 static struct s_tip {
 	uint16_t	t200, t260, t330, t400;				// The internal temperature in reference points
 	uint8_t		mask;								// The bit mask: TIP_ACTIVE + TIP_CALIBRATED
-	char		name[40];					// T12 tip name suffix, JL02 for T12-JL02
+	char		name[40];							// T12 tip name suffix, JL02 for T12-JL02
 	int8_t		ambient;							// The ambient temperature in Celsius when the tip being calibrated
 	uint8_t		crc;								// CRC checksum
 } tip;
@@ -148,7 +152,7 @@ void station_init_periph(void)
 	_station.mode_flags = 0;
 	_station.handle_flags = 0;
 	_station.lcd_update_freq = 100;
-	_station.temp_set = 2000;
+	_station.temp_preset = 2000;
 	_station.max_power = 1600;
 
 	tip.t200 = 1100;
@@ -166,6 +170,8 @@ void station_init_periph(void)
 	tim_init();
 
 	_station.mode_flags |= STATION_INITED;
+	_station.mode_flags |= STATION_MODE_OPERATE; // 1 - normal operate mode, 0 - menu mode
+	_station.mode_flags |= STATION_DISPLAY_MODE_NORMAL; //TODO:  load settings from eeprom
 
 }
 
@@ -174,6 +180,8 @@ void station_iron_on_off(uint8_t on)
 	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
 		if ( on && !(_station.handle_flags & IRON_ON_FLAG) ) {
 			_station.handle_flags |= IRON_ON_FLAG;
+			_station.handle_flags &= ~IRON_SLEEP_FLAG;
+			_station.temp_set = _station.temp_preset;
 			arm_pid_reset_q15(&pid_q);
 		}
 		if (!on && (_station.handle_flags & IRON_ON_FLAG) ) {
@@ -204,6 +212,27 @@ void station_iron_sleep_on_off(uint8_t val)
 	arm_pid_reset_q15(&pid_q);
 }
 
+void station_iron_temp_adjust(int8_t val)
+{
+	if (_station.temp_preset + val >= TIP_MAX_TEMP_ADC) val = _station.temp_preset = TIP_MAX_TEMP_ADC;
+	else if (_station.temp_preset + val <= TIP_MIN_TEMP_ADC) _station.temp_preset = TIP_MIN_TEMP_ADC;
+	else _station.temp_preset += val;
+
+	_station.temp_set = _station.temp_preset;
+	//arm_pid_reset_q15(&pid_q);
+}
+
+void pid_d_tune(uint8_t val)
+{
+	if (val) {
+		if (++(pid_q.Kd) >= 0x7FFD) pid_q.Kd = 0x7FFD;
+	} else {
+		if (--(pid_q.Kd) < 0) pid_q.Kd = 0;
+	}
+	debug_print(USART1, "p: %d i: %d d: %d, ratio: %d\r\n", pid_q.Kp, pid_q.Ki, pid_q.Kd, (uint16_t)(pid_q.Kp/pid_q.Kd));
+	arm_pid_init_q15(&pid_q, 0);
+}
+
 uint8_t station_get_mode(void)
 {
 	return _station.mode_flags;
@@ -214,11 +243,13 @@ uint16_t station_get_update_freq(void)
 	return _station.lcd_update_freq;
 }
 
-void station_get_disp_values(uint16_t *t, int *hamb, uint8_t *pwr)
+void station_get_disp_values(uint16_t *t, uint16_t *t_preset, int *hamb, uint8_t *pwr, uint16_t *t_current)
 {
 	*t = station_get_temp(_station.temp_avg, _station.h_ambient);
+	*t_preset = station_get_temp(_station.temp_preset, 23);
 	*hamb = _station.h_ambient;
 	*pwr = station_get_power();
+	*t_current = map(TIM2->CCR2, 0, TIP_PWM_TIMER_PERIOD, 0, 300);
 }
 
 uint8_t station_iron_get_connected()
@@ -257,15 +288,18 @@ void station_iron_recalc_clbk()
 {
 
 	if (_station.handle_flags & IRON_CONNECTED_FLAG) {
-		//TODO calculate power with pid
 
 		_station.temp_avg = exp_mov_average((int32_t *)(&ema_buff[1]), ema_coeffs[1], _station.adc_values[ADC_TIP_TEMERATURE_VAL]);
 		if (_station.handle_flags & IRON_ON_FLAG) {
 			/*calc pwm func begin*/
-			if (_station.adc_values[ADC_TIP_TEMERATURE_VAL] < 500) {
+
+			if (_station.adc_values[ADC_TIP_TEMERATURE_VAL] < 1400) {
 				TIM2->CCR2 = _station.max_power;
+			} else if (_station.adc_values[ADC_TIP_TEMERATURE_VAL] > _station.temp_set + 10) {
+				TIM2->CCR2 = 0;
+
 			} else {
-				TIM2->CCR2 = station_iron_pwm_calc();
+				TIM2->CCR2 = station_iron_pwm_calc();;
 			}
 
 		} else {
@@ -400,26 +434,50 @@ uint32_t station_iron_pwm_calc(uint16_t _curr)
 	return ret;
 }
 #endif
+/*
+static q15_t adc_to_q15 (int32_t _val)
+{
+	if (_val >= 4096) _val = 4096 - 1;
+	if (_val <= (-1 * 4096)) _val = (-1 * 4096) + 1;
+	int64_t acc = ((_val << 15)/4096);
+
+	acc =  ((acc * (2 << 14)) >> 15 );
+
+	return (q15_t) (acc);
+}
+*/
+
+q15_t error_to_q15(uint16_t _val, uint16_t target)
+{
+	int16_t err = target - _val;
+
+	if (err < -999 ) {
+		err = -999;
+	}
+	int64_t acc = ((err << 15)/(target + 1));
+
+	acc =  ((acc * (2 << 14)) >> 15 );
+	return (q15_t) (acc);
+}
 
 uint16_t station_iron_pwm_calc(void)
 {
-	uint32_t tip_err;
-	q15_t _in_err, _out_p;
 
-	tip_err = (int32_t)(((_station.temp_set - _station.adc_values[ADC_TIP_TEMERATURE_VAL]) << 15)/(_station.temp_set - TEMP_0));
-	_in_err = (int16_t)((tip_err * (2 << 14)) >> 15);
+	q15_t _in_err, _out_p/*, _adc, _set*/;
+
+	_in_err = error_to_q15(_station.adc_values[ADC_TIP_TEMERATURE_VAL], _station.temp_set);
 	_out_p = arm_pid_q15(&pid_q, _in_err);
 
 	if (_out_p < 0 ) _out_p = 0;
 	return ( (uint16_t)map(_out_p, 0, 32768, 0, _station.max_power));
 
-
 }
+
 uint8_t station_get_power(void)
 {
 	//uint16_t tmp = _station.avg_power;
 	//tmp = constrain(tmp, 0, _station.max_power);
-	return /*(uint8_t) map(tmp, 0, _station.max_power, 0, 100)*/((uint8_t)(100*TIM2->CCR2/_station.max_power));
+	return ((uint8_t)(100*TIM2->CCR2/_station.max_power));
 }
 
 static uint16_t station_get_temp(uint16_t temp, int16_t ambient) {

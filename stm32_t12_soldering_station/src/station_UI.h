@@ -11,5 +11,6 @@
 extern void station_ui_callback(void);
 extern void station_button_callback(void);
 extern void station_ui_input_handler(void);
+extern void station_ui_rotary_callback(void);
 
 #endif /* __STATION_UI_H__ */

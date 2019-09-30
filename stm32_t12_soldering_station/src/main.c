@@ -58,11 +58,10 @@ SOFTWARE.
 */
 int main(void)
 {
-	/* TODO - Add your application code here */
 	station_init_periph();
 
 	debug_print(USART1, "dupa\r\n");
-	//USART_SendData(USART1, 'c');
+
 	/* Infinite loop */
 	while (1) {
 

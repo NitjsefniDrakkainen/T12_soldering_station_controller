@@ -30,6 +30,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f1xx_it.h"
 #include "station.h"
+#include "station_UI.h"
+#include "m_snprintf.h"
 
 /** @addtogroup IO_Toggle
   * @{
@@ -141,6 +143,9 @@ void PendSV_Handler(void)
   */
 void SysTick_Handler(void)
 {
+	station_controll_callback();
+	station_ui_input_handler();
+	station_ui_callback();
 }
 
 /******************************************************************************/
@@ -169,10 +174,26 @@ void SysTick_Handler(void)
   * @retval None
   */
 
-void TIM2_IRQHandler()
+void TIM3_IRQHandler()
 {
-	TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
-	station_iron_tip_handler();
+
+	if (TIM_GetITStatus(TIM3, TIM_IT_Update) == SET) {
+		if (TIM2->CCR2 < 100) {
+			TIM2->CCR2 = 100;
+		}
+
+		TIM_ClearITPendingBit(TIM3, TIM_IT_Update);
+	}
+
+	if (TIM_GetITStatus(TIM3, TIM_IT_CC1) == SET) {
+		station_iron_heat_clbk();
+		TIM_ClearITPendingBit(TIM3, TIM_IT_CC1);
+	}
+
+	if (TIM_GetITStatus(TIM3, TIM_IT_CC2) == SET) {
+		station_iron_recalc_clbk();
+		TIM_ClearITPendingBit(TIM3, TIM_IT_CC2);
+	}
 }
 
 /**
@@ -185,6 +206,7 @@ void EXTI9_5_IRQHandler()
 {
 	if (EXTI_GetITStatus(EXTI_Line9) != RESET) {
 		EXTI_ClearITPendingBit(EXTI_Line9);
+
 	}
 
 }
@@ -197,8 +219,11 @@ void EXTI9_5_IRQHandler()
 
 void EXTI15_10_IRQHandler()
 {
+
 	if (EXTI_GetITStatus(EXTI_Line13) != RESET) {
 		EXTI_ClearITPendingBit(EXTI_Line13);
+
+		station_button_callback();
 	}
 
 	if (EXTI_GetITStatus(EXTI_Line12) != RESET) {
